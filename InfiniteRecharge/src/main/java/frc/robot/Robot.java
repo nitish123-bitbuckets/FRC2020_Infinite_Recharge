@@ -9,11 +9,13 @@ package frc.robot;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj2.command.WaitUntilCommand;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
+import edu.wpi.first.wpilibj2.command.ConditionalCommand;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.WaitCommand;
 import frc.robot.config.Config;
@@ -24,15 +26,17 @@ import frc.robot.subsystem.BitBucketSubsystem;
 import frc.robot.subsystem.climber.ClimbSubsystem;
 import frc.robot.subsystem.vision.VisionSubsystem;
 import frc.robot.utils.CommandUtils;
+import frc.robot.utils.ProxyCommand;
 import frc.robot.subsystem.drive.DriveSubsystem;
 import frc.robot.subsystem.drive.DriveUtils;
+import frc.robot.subsystem.drive.Idle;
 import frc.robot.subsystem.drive.auto.AutoDrive;
 import frc.robot.subsystem.navigation.NavigationSubsystem;
 import frc.robot.subsystem.pidhelper.PIDHelperSubsystem;
 import frc.robot.subsystem.scoring.intake.IntakeSubsystem;
 import frc.robot.subsystem.scoring.shooter.ShooterConstants;
 import frc.robot.subsystem.scoring.shooter.ShooterSubsystem;
-
+import java.util.function.BooleanSupplier;
 /**
  * The VM is configured to automatically run this class, and to call the
  * functions corresponding to each mode, as described in the TimedRobot
@@ -71,17 +75,17 @@ public class Robot extends TimedRobot {
         visionSubsystem = new VisionSubsystem(config);
         subsystems.add(visionSubsystem);
 
-        if (config.enableDriveSubsystem) {
-            navigationSubsystem = new NavigationSubsystem(config, visionSubsystem);
-            driveSubsystem = new DriveSubsystem(config, navigationSubsystem, oi);
-            navigationSubsystem.setDrive(driveSubsystem); // Java
-            subsystems.add(driveSubsystem);
-            subsystems.add(navigationSubsystem);
-        }
-
         if (config.enableShooterSubsystem) {
             shooterSubsystem = new ShooterSubsystem(config, visionSubsystem);
             subsystems.add(shooterSubsystem);
+        }
+
+        if (config.enableDriveSubsystem && config.enableShooterSubsystem) {
+            navigationSubsystem = new NavigationSubsystem(config, visionSubsystem, shooterSubsystem);
+            driveSubsystem = new DriveSubsystem(config, navigationSubsystem, visionSubsystem);
+            navigationSubsystem.setDrive(driveSubsystem); // Java
+            subsystems.add(driveSubsystem);
+            subsystems.add(navigationSubsystem);
         }
 
         if (config.enableIntakeSubsystem) {
@@ -107,6 +111,7 @@ public class Robot extends TimedRobot {
 
         for (BitBucketSubsystem subsystem : subsystems) {
             subsystem.initialize();
+            subsystem.listTalons();
             canChecker.addTalons(subsystem.getTalons());
         }
 
@@ -154,32 +159,108 @@ public class Robot extends TimedRobot {
      */
     @Override
     public void autonomousInit() {
-        /*shooterSubsystem.spinBMS();
-        shooterSubsystem.rotateToDeg(0, 45);
-        shooterSubsystem.startSpinningUp();
+        // reset nav system, turn on LL leds
+        navigationSubsystem.reset();
+        navigationSubsystem.setInitialPose(driveSubsystem.getFirstPickupTrajectory().getInitialPose());
+        visionSubsystem.turnOnLEDs();
+        // begin spinning up our hopper
+        shooterSubsystem.spinBMS();
 
-        intakeSubsystem.toggleIntakeArm();
+        //intakeSubsystem.toggleIntakeArm();
 
-        new WaitUntilCommand(() -> {
+        // start the command sequence
+        // and turn the intake
+        new InstantCommand(() -> {
+            intakeSubsystem.intake();
+        })
+
+        // do the first pickup and return
+        .andThen(new AutoDrive(driveSubsystem, driveSubsystem.getFirstPickupTrajectory()))
+        .andThen(new AutoDrive(driveSubsystem, driveSubsystem.getFirstReturnTrajectory()))
+
+        // raise the hood angle and sh00t
+        .andThen(() -> shootStuff())
+
+        // wait until we're done shooting
+        .andThen(new WaitUntilCommand(() -> {
             System.out.println("Wait until");
             return shooterSubsystem.isUpToSpeed();
-        })
-        .andThen(new WaitCommand(5)) // for BMS
-        .andThen(new InstantCommand(() -> {
-            System.out.println("Turning everything off");
-            shooterSubsystem.stopSpinningUp();
-            shooterSubsystem.holdFire();
-            shooterSubsystem.rotateToDeg(0, 0);
-
-            intakeSubsystem.intake();
-        }))*/
-        (new InstantCommand(() -> { intakeSubsystem.intake(); }))
-        .andThen(new AutoDrive(driveSubsystem))
-        .andThen(new InstantCommand(() -> {
-            System.out.println("Turning intake off");
-            intakeSubsystem.off();
         }))
+        // the isUpToSpeed() was broken or something so we added this for a fix? dont quite remember
+        // either way, we wait to make *sure* we're done shooting
+        .andThen(new WaitCommand(3))
+
+        // stop shooting and lower the hood
+        .andThen(new InstantCommand(() -> {
+            shooterSubsystem.stopSpinningUp();
+            shooterSubsystem.stopSpinningFeeder();
+            shooterSubsystem.rotateToDeg(0, 0);
+        }))
+
+        // so that we're sure that the hood angle can go down
+        .andThen(new WaitCommand(1))
+
+        // only execute the 2nd pickup and return if we have the trajectories for those
+        // if we have a pickup, we'll have a return; so we don't have to worry about that
+        .andThen(new ConditionalCommand(
+            new ProxyCommand(() ->
+
+                // get the second set of balls and shoot
+                new AutoDrive(driveSubsystem, driveSubsystem.getSecondPickupTrajectory())
+                .andThen(new AutoDrive(driveSubsystem, driveSubsystem.getSecondReturnTrajectory()))
+                .andThen(() -> shootStuff())
+
+                // to shoot the shots
+                .andThen(new WaitUntilCommand(() -> {
+                    System.out.println("Wait until");
+                    return shooterSubsystem.isUpToSpeed();
+                }))
+                .andThen(new WaitCommand(3))
+
+                // we are done so stop it
+                .andThen(() -> stopEverything())
+            ),
+            // stop it if we dont have a second path
+            new InstantCommand(() -> {
+                stopEverything();
+            }),
+            // only IF we have a second trajectory in the first place
+            driveSubsystem::hasSecondTrajectory
+        ))
+
+        // stop everything
+        .andThen(() -> stopEverything())
+
+        // all done
+        .andThen(new Idle(driveSubsystem))
         .schedule();
+    }
+
+    /**
+     * helper method to disable everything we need once we're done
+     */
+    public void stopEverything(){
+        driveSubsystem.tankVolts(0, 0);
+        shooterSubsystem.stopSpinningFeeder();
+        shooterSubsystem.stopSpinningUp();
+        shooterSubsystem.holdFire();
+        shooterSubsystem.rotateToDeg(0, 0);
+        intakeSubsystem.off();
+        new Idle(driveSubsystem);
+    }
+
+    /**
+     * helper method to do everything we need to shoot a ball
+     */
+    public void shootStuff() {
+        // stop moving
+        driveSubsystem.tankVolts(0, 0);
+        // rotate the hood angle to 45deg
+        shooterSubsystem.rotateToDeg(0, 45);
+        // start spinning up the shooter
+        shooterSubsystem.startSpinningUp();
+        // spin the feeder (which feeds to the shooter)
+        shooterSubsystem.spinFeeder();
     }
 
     /**
@@ -191,7 +272,16 @@ public class Robot extends TimedRobot {
 
     @Override
     public void teleopInit() {
-        shooterSubsystem.rotateToDeg(0, ShooterConstants.DEFAULT_ELEVATION_TARGET_DEG);
+        visionSubsystem.turnOnLEDs();
+
+        if (config.enableShooterSubsystem) {
+            shooterSubsystem.rotateToDeg(0, ShooterConstants.DEFAULT_ELEVATION_TARGET_DEG);
+        }
+
+        if (config.enableClimbSubsystem) {
+            climbSubsystem.disableClimb();
+            climbSubsystem.disableRewind();
+        }
     }
 
     /**
@@ -206,6 +296,8 @@ public class Robot extends TimedRobot {
         if (config.enableDriveSubsystem) {
             driveSubsystem.setDriverRawSpeed(oi.speed());
             driveSubsystem.setDriverRawTurn(oi.turn());
+
+            driveSubsystem.setAutoAligning(oi.driveAimBot());
         }
 
         //////////////////////////////////////////////////////////////////////////////
@@ -229,18 +321,18 @@ public class Robot extends TimedRobot {
         /////////////////////////////////////////////////////////////////////////////
         // Climb Subsystem
         if (config.enableClimbSubsystem) {
-            if (oi.climbactivate()) {
-                climbSubsystem.activateClimb();
-            }
-            if (oi.climbextend()) {
-                climbSubsystem.extending();
+            if (oi.climbActivate()) {
+                climbSubsystem.toggleActive();
             }
 
-            if (oi.climbretract()) {
-                climbSubsystem.retracting();
-            } else if (!climbSubsystem.isExtending()) {
-                climbSubsystem.off();
+            if (climbSubsystem.isActive()) {
+                if (!climbSubsystem.isRewindEnabled()) {
+                    climbSubsystem.manualClimb(oi.manualClimbLeft(),oi.manualClimbRight());
+                } else if (climbSubsystem.isRewindEnabled()) {
+                    climbSubsystem.pitRewind(oi.pitRewindLeft(), oi.pitRewindRight());
+                }
             }
+
         }
         //////////////////////////////////////////////////////////////////////////////
         // Shooter Subsystem
@@ -248,10 +340,16 @@ public class Robot extends TimedRobot {
         if (config.enableShooterSubsystem) {
             SmartDashboard.putNumber("BallManagementSubsystem/Output Percent", 50);
 
+            if (oi.feeder()){
+                shooterSubsystem.spinFeeder();
+            } else {
+                shooterSubsystem.stopSpinningFeeder();
+            }
+
             // Spin up on pressing [spinUp] and auto aim on pressing [aimBot]
             if (oi.spinUp()) {
                 shooterSubsystem.startSpinningUp();
-            } else if (oi.aimBot()) {
+            } else if (oi.operatorAimBot()) {
                 shooterSubsystem.autoAim();
             } else {
                 shooterSubsystem.stopSpinningUp();
@@ -329,6 +427,10 @@ public class Robot extends TimedRobot {
         }
     }
 
+    public DriveSubsystem getDriveSubsystem() {
+        return driveSubsystem;
+    }
+
     // COMMANDS the robot to WIN!
     public static Robot win() {
         System.out.println("Leif WAS here");
@@ -336,7 +438,11 @@ public class Robot extends TimedRobot {
         return new Robot();
     }
 
-    public static Robot beat254() {
+    public static Robot beat(int teamNumber) {
         return win();
+    }
+
+    public static Robot beat254() {
+        return beat(254);
     }
 }

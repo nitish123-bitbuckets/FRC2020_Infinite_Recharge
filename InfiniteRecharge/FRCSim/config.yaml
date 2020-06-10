@@ -64,9 +64,13 @@ defaults:
   elevationGearing: "{{ 350.0/1.0 }}"
 hideFollowers: true
 driveBase:
-  radius: "{{ 22.65 * 2.54 / 100 / 2}}" # radius of robot in meters
+  radius: "{{ 23.90069263162104 * 2.54 / 100 / 2}}" # radius of robot in meters
   wheelRadius: "{{ 6 * 2.54 / 100 / 2}}" # 6 inch diameter wheels in meters
   gearRatio: "{{ 10 + 8.0 / 9 }}"
+startPosition:
+  x: 3 #-3.5 for opponent trench, 1.7 for the center, 3 for our trench
+  y: 5
+  heading: 3.14159
 transmissions:
 - motors:
   - id: "{{ defaults.ids.leftDriveLeader }}"

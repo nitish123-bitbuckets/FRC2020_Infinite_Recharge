@@ -7,7 +7,6 @@
 
 package frc.robot.subsystem.navigation;
 
-import com.ctre.phoenix.motorcontrol.can.BaseTalon;
 import com.kauailabs.navx.frc.AHRS;
 
 import edu.wpi.first.wpilibj.geometry.Pose2d;
@@ -19,39 +18,50 @@ import frc.robot.config.Config;
 
 import frc.robot.subsystem.BitBucketSubsystem;
 import frc.robot.subsystem.drive.DriveSubsystem;
-import frc.robot.subsystem.drive.auto.FieldConstants;
+import frc.robot.subsystem.navigation.systems.RobotSystem1;
+import frc.robot.subsystem.navigation.systems.RobotSystemConfig;
+import frc.robot.subsystem.scoring.shooter.ShooterSubsystem;
 import frc.robot.utils.data.DoubleDataWindow;
-
 import frc.robot.subsystem.vision.VisionSubsystem;
 
-/**
- * Add your docs here.
- */
 public class NavigationSubsystem extends BitBucketSubsystem {
 	// Put methods for controlling this subsystem
 	// here. Call these from Commands.
 
     private AHRS ahrs;
 
+    // recent acceleration data from IMU
     private DoubleDataWindow imuAcc = new DoubleDataWindow(NavigationConstants.IMU_DATA_SIZE);
+    // recent gyroscope data from IMU
     private DoubleDataWindow imuGyro = new DoubleDataWindow(NavigationConstants.IMU_DATA_SIZE);
+    // time to update localization stuff
     private DoubleDataWindow dts = new DoubleDataWindow(50);
 
     private DriveSubsystem driveSubsystem;
     private VisionSubsystem visionSubsystem;
+    private ShooterSubsystem shooterSubsystem;
 
-    private RobotSystem sys;
+    // robot system used for localization
+    private RobotSystem1 sys;
 
 
 
+    // odometry, until we get localization to work, and in case we can't use localization for some reason
     private DifferentialDriveOdometry odometry;
 
 
     
-	public NavigationSubsystem(Config config, VisionSubsystem visionSubsystem) {
+	public NavigationSubsystem(Config config, VisionSubsystem visionSubsystem, ShooterSubsystem shooterSubsystem) {
         super(config);
         
-		this.visionSubsystem = visionSubsystem;
+        this.visionSubsystem = visionSubsystem;
+        this.shooterSubsystem = shooterSubsystem;
+        
+        Rotation2d rotation = new Rotation2d(0);
+        odometry = new DifferentialDriveOdometry(
+            rotation,
+            new Pose2d(0, 0, rotation)
+        );
     }
     
     public void setDrive(DriveSubsystem drive) {
@@ -73,18 +83,36 @@ public class NavigationSubsystem extends BitBucketSubsystem {
         super.initialize();
 
         ahrs = BitBucketsAHRS.instance();
-        sys = new RobotSystem();
 
+        RobotSystemConfig systemConfig = new RobotSystemConfig();
+
+        systemConfig.azimuthDegrees = shooterSubsystem::getAzimuthDeg;
+        systemConfig.leftVolts      = driveSubsystem::getLeftVolts;
+        systemConfig.rightVolts     = driveSubsystem::getRightVolts;
+        systemConfig.tyFromDistance = visionSubsystem::approximateTyFromDistance;
+
+        sys = new RobotSystem1(config, systemConfig);
+
+        reset();
+    }
+
+    public void reset() {
         ahrs.reset();
         ahrs.setAngleAdjustment(0);
 
-        Rotation2d rotation = Rotation2d.fromDegrees(getYaw_deg());
+        Rotation2d rotation = new Rotation2d(0);//Rotation2d.fromDegrees(getYaw_deg());
 
-        odometry = new DifferentialDriveOdometry(
-            rotation,
-            new Pose2d(new Translation2d(0, 0), rotation)
+        odometry.resetPosition(
+            new Pose2d(0, 0, rotation),
+            rotation
         );
-	}
+
+        driveSubsystem.resetEncoders();
+    }
+
+    public void setInitialPose(Pose2d pose) {
+        sys.setInitialPose(pose);
+    }
 
   	@Override
 	public void testInit() {
@@ -129,8 +157,6 @@ public class NavigationSubsystem extends BitBucketSubsystem {
         double yaw = getYaw_deg();
 
         double v0 = 0.01;
-
-        sys.getModel(v0, yaw);
 
         double t1 = System.nanoTime();
         double dt = (t1 - t0) / 1000000000;
@@ -231,9 +257,14 @@ public class NavigationSubsystem extends BitBucketSubsystem {
 
     }
 
+    public Config getConfig() { return config; }
+    public DriveSubsystem getDrive() { return driveSubsystem; }
+    public VisionSubsystem getVision() { return visionSubsystem; }
+    public ShooterSubsystem getShooter() { return shooterSubsystem; }
+
     public void disable(){
     }
 
 	@Override
-    protected void listTalons() {}
+    public void listTalons() {}
 }

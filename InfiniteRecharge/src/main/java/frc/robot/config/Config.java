@@ -1,5 +1,7 @@
 package frc.robot.config;
 
+import org.ejml.simple.SimpleMatrix;
+
 import edu.wpi.first.wpilibj.controller.SimpleMotorFeedforward;
 import frc.robot.config.Config.ShooterConfig.BallManagementConfig;
 import frc.robot.utils.control.pidf.PIDF;
@@ -62,18 +64,27 @@ public class Config {
         public double manualAzimuthDeadband = 0.2;
         public double manualElevationDeadband = 0.2;
 
-        public float rightAzimuthSoftLimit_deg = 90;
         public float leftAzimuthSoftLimit_deg = 90;
+        public float rightAzimuthSoftLimit_deg = 180;
+        
         public float forwardElevationSoftLimit_deg = 60;
         public float backwardElevationSoftLimit_deg = 0;
 
-        public float feederSpinUpDeadband_ticks = 75;
+        public float feederSpinUpDeadband_ticks = 50;
 
         public MotorConfig azimuth = new MotorConfig();
         public MotorConfig elevation = new MotorConfig();
         public MotorConfig feeder = new MotorConfig();
         public MotorConfig shooter = new MotorConfig();
         public MotorConfig shooterFollower = new MotorConfig();
+
+        // meters as all good things are
+        // relative to center of robot
+        // not necessarily CoM of robot but like, same thing
+        public double xTurretCenter = 0.17181322;
+        public double yTurretCenter = 0.01766824;
+        // distance from center of turret to LL camera
+        public double rLL = 0.19368008;
 
         public float[] elevationPositions_deg = new float[] { //
                 0, /// Comment so that VSCode doesn't ruin my format.
@@ -108,7 +119,7 @@ public class Config {
     }
 
     public static class IntakeConfig {
-        public boolean intakePivotEnabled = false;
+        public boolean intakePivotEnabled = true;
 
         public MotorConfig intake = new MotorConfig();
     }
@@ -117,6 +128,10 @@ public class Config {
 
         public MotorConfig climbLeft = new MotorConfig();
         public MotorConfig climbRight = new MotorConfig();
+
+        ClimbConfig(){
+            climbLeft.inverted = true;
+        }
     }
 
     public static class SpinnyBoiConfig {
@@ -152,7 +167,48 @@ public class Config {
 
         public double ROTATION_DRIVE_KP = 5 * 2 * Math.PI / 360;
 
-        public SimpleMotorFeedforward characterization = new SimpleMotorFeedforward(0.159, 2.46, 0.303);
+        public SimpleMotorFeedforward characterization = new SimpleMotorFeedforward(0.163, 2.46, 0.251);
+
+
+
+        public boolean useFancyOdometry = false;
+
+        // these are matrices used for describing the time evolution of our drive base's velocities
+        // CODE REVIEW PARTY: feel free to ignore these
+        // the state is x = [left velocity, right velocity]'
+        // the input is u = [left voltage,  right voltage]'
+        // in discrete time: x(t + 20ms) = Ad*x(t) + Bd*u(t)
+        // in continuous time: x' = Ac*x(t) + Bc*u(t)
+        
+        // discrete time
+        public SimpleMatrix Ad_char = new SimpleMatrix(2, 2, true, new double[] {
+            0.8678678537600736, 0.0071917452743623786,
+            0.005903949588909425, 0.8723072041767262
+        });
+
+        public SimpleMatrix Bd_char = new SimpleMatrix(2, 2, true, new double[] {
+            0.050392385308988936, -0.004313538469407867,
+            -0.002206154164037924, 0.047675029476658845
+        });
+
+        // continuous time
+        public SimpleMatrix Ac_char = new SimpleMatrix(2, 2, true, new double[] {
+            -7.087195478354283, 0.413285738104402,
+            0.339280393075371, -6.832080740045777
+        });
+
+        // continuous time system noise
+        public SimpleMatrix QVc_char = new SimpleMatrix(2, 2, true, new double[] {
+            0.359432446406913, 0.349630210052408,
+            0.349630210052408, 0.366367970306715
+        });
+
+        public SimpleMatrix Bc_char = new SimpleMatrix(2, 2, true, new double[] {
+            2.702895517197959, -0.241632861263366,
+            -0.126961060623545, 2.551095849721741
+        });
+
+
 
         public DriveConfig() {
         }
@@ -184,12 +240,23 @@ public class Config {
         }
     }
 
+    public static class AutoConfig {
+        public double cruiseSpeed_mps = 0.3*14;
+        public double maxAcceleration_mps = 2;
+
+        public double b = 2;
+        public double zeta = 0.35;
+
+        public double kP = 0.911;
+    }
+
     public ShooterConfig shooter = new ShooterConfig();
     public BallManagementConfig ballManagement = new BallManagementConfig();
     public DriveConfig drive = new DriveConfig();
     public IntakeConfig intake = new IntakeConfig();
     public SpinnyBoiConfig spinnyboi = new SpinnyBoiConfig();
     public ClimbConfig climb = new ClimbConfig();
+    public AutoConfig auto = new AutoConfig();
 
     public Config() {
 
@@ -210,7 +277,7 @@ public class Config {
         // Climb
         climb.climbRight.id = CLIMB_RIGHT_MOTOR_ID;
         climb.climbLeft.id = CLIMB_LEFT_MOTOR_ID;
-        climb.climbLeft.followingID = climb.climbRight.id;
+
         // SpinnyBoi
         spinnyboi.spinner.id = SPINNYBOI_MOTOR_ID;
 
@@ -241,6 +308,21 @@ public class Config {
                 0, // D
                 0, /// F,
                 0
+        );
+
+        // Climb
+        climb.climbLeft.positionPIDF = new PIDF(//
+                0.1 * 1023f / 176 * 2 * 2 * 2 * 2, // P
+                0, // I
+                10 * 0.1 * 1023f / 176 * 2 * 2 * 2 * 2, // D
+                1023f / 2650 /// F
+        );
+        
+        climb.climbRight.positionPIDF = new PIDF(//
+                0.1 * 1023f / 176 * 2 * 2 * 2 * 2, // P
+                0, // I
+                10 * 0.1 * 1023f / 176 * 2 * 2 * 2 * 2, // D
+                1023f / 2650 /// F
         );
 
         // SpinnyBoi

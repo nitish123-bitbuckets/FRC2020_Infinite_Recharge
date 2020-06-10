@@ -2,6 +2,13 @@ package frc.robot.utils.data.noise;
 
 import org.ejml.simple.SimpleMatrix;
 
+/*
+ * ==================================
+ * 2020 Code Review Party Information
+ * 
+ * Feel free to ignore this file
+ * ==================================
+ */
 public class Noise {
     private final SimpleMatrix G;
     private final SimpleMatrix Q;
@@ -11,6 +18,10 @@ public class Noise {
     public Noise(SimpleMatrix G, SimpleMatrix Q) {
         this.G = G;
         this.Q = Q;
+    }
+
+    public Noise(SimpleMatrix Q) {
+        this(Q, SimpleMatrix.identity(Q.numCols()));
     }
 
 

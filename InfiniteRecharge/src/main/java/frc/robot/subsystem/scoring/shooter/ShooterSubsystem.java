@@ -37,6 +37,10 @@ public class ShooterSubsystem extends BitBucketSubsystem {
     private boolean spinningUp = false;
     private boolean autoAiming = false; // used to decide which velocity to use for the shooter
 
+    private boolean leftAzimuthLimitSwitchClosed;
+    private boolean rightAzimuthLimitSwitchClosed;
+    private boolean reverseElevationLimitSwitchClosed;
+
     // Integers
     private int targetPositionAzimuth_ticks;
     private int targetChangeAzimuth_ticks;
@@ -80,6 +84,17 @@ public class ShooterSubsystem extends BitBucketSubsystem {
     // Neos
 
     //////////////////////////////////////////////////////////////////////////////
+    // Smart Dashboard Variables
+
+    double smartDashboardGetterRateLimiterClock;
+
+    private double shooterVelocity_rpm;
+    private double feederOutputPercent;
+    private double BMSOutputPercent;
+    private double azimuthTurnRate;
+    private double elevationTurnRate;
+
+    //////////////////////////////////////////////////////////////////////////////
     // Methods
 
     public ShooterSubsystem(Config config, VisionSubsystem visionSubsystem) {
@@ -93,9 +108,18 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         azimuthMotor = MotorUtils.makeSRX(config.shooter.azimuth);
         elevationMotor = MotorUtils.makeSRX(config.shooter.elevation);
 
-        elevationMotor.configReverseLimitSwitchSource(LimitSwitchSource.FeedbackConnector,LimitSwitchNormal.NormallyOpen,0);
-        elevationMotor.configForwardLimitSwitchSource(LimitSwitchSource.FeedbackConnector,LimitSwitchNormal.NormallyOpen,0);
-		
+        azimuthMotor.configReverseLimitSwitchSource(LimitSwitchSource.FeedbackConnector, LimitSwitchNormal.NormallyOpen,
+                0);
+        azimuthMotor.configForwardLimitSwitchSource(LimitSwitchSource.FeedbackConnector, LimitSwitchNormal.NormallyOpen,
+                0);
+
+        azimuthMotor.overrideLimitSwitchesEnable(true);
+
+        elevationMotor.configReverseLimitSwitchSource(LimitSwitchSource.FeedbackConnector,
+                LimitSwitchNormal.NormallyOpen, 0);
+        elevationMotor.configForwardLimitSwitchSource(LimitSwitchSource.FeedbackConnector,
+                LimitSwitchNormal.NormallyOpen, 0);
+
         elevationMotor.overrideLimitSwitchesEnable(true);
 
         ballPropulsionMotor = MotorUtils.makeFX(config.shooter.shooter);
@@ -104,7 +128,7 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         ballPropulsionMotor.configClosedloopRamp(0);
         ballPropulsionMotor.setNeutralMode(NeutralMode.Coast);
 
-        ballPropulsionFollower = MotorUtils.makeFX(config.shooter.shooterFollower); 
+        ballPropulsionFollower = MotorUtils.makeFX(config.shooter.shooterFollower);
 
         feeder = MotorUtils.makeSRX(config.shooter.feeder);
         feeder.selectProfileSlot(MotorUtils.velocitySlot, 0);
@@ -126,6 +150,24 @@ public class ShooterSubsystem extends BitBucketSubsystem {
                 config.shooter.elevation.ticksPerRevolution) / config.shooter.elevationGearRatio;
         backwardElevationSoftLimit_ticks = MathUtils.unitConverter(config.shooter.backwardElevationSoftLimit_deg, 360,
                 config.shooter.elevation.ticksPerRevolution) / config.shooter.elevationGearRatio;
+        // You may have noticed the usage of MathUtils.unitConverter, if you're
+        // wondering what it does and how it works, then look no further!
+        /**
+         * The unit converter works like this: The first variable is the amount, lets
+         * just say 10 for an example.
+         *
+         * The second is the unit to be converted, or the unit in which the amount is
+         * measured. For example let's say the amount is in degrees, that would mean
+         * this number is 360.
+         *
+         * The third is what the previous two should be converted into. For this example
+         * I'll use radians, that means this number would be 6.28319.
+         *
+         * So in this example we have MathUtils.unitConverter(10, 360, 6.28319) which
+         * would convert 10 degrees into radians.
+         */
+
+        //
 
         if (config.shooter.rightAzimuthSoftLimit_deg != -1 && config.shooter.leftAzimuthSoftLimit_deg != -1) {
             azimuthMotor.configForwardSoftLimitEnable(true);
@@ -148,10 +190,14 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         ballPropulsionFollower.configClosedloopRamp(0);
 
         ballPropulsionMotor.enableVoltageCompensation(true);
-        ballPropulsionMotor.configVoltageCompSaturation(6.5);
+        ballPropulsionMotor.configVoltageCompSaturation(12);
+        ballPropulsionMotor.configNominalOutputReverse(0);
+        ballPropulsionMotor.setNeutralMode(NeutralMode.Coast);
 
         ballPropulsionFollower.enableVoltageCompensation(true);
-        ballPropulsionFollower.configVoltageCompSaturation(6.5);
+        ballPropulsionFollower.configVoltageCompSaturation(12);
+        ballPropulsionFollower.configNominalOutputReverse(0);
+        ballPropulsionFollower.setNeutralMode(NeutralMode.Coast);
 
         ballPropulsionMotor.configVelocityMeasurementWindow(1);
     }
@@ -178,10 +224,12 @@ public class ShooterSubsystem extends BitBucketSubsystem {
 
         calculateAbsoluteDegreesToRotate();
 
+        // Calculate the target position of the turret in manual mode.
         targetPositionAzimuth_ticks = (int) (targetPositionAzimuth_ticks + (targetChangeAzimuth_ticks * deltaTime));
         targetPositionElevation_ticks = (int) (targetPositionElevation_ticks
                 + (targetChangeElevation_ticks * deltaTime));
 
+        // Apply the soft limits.
         if (config.shooter.rightAzimuthSoftLimit_deg != -1 && config.shooter.leftAzimuthSoftLimit_deg != -1) {
             if (targetPositionAzimuth_ticks > rightAzimuthSoftLimit_ticks) {
                 targetPositionAzimuth_ticks = (int) rightAzimuthSoftLimit_ticks;
@@ -196,17 +244,33 @@ public class ShooterSubsystem extends BitBucketSubsystem {
                 targetPositionElevation_ticks = (int) -backwardElevationSoftLimit_ticks;
             }
         }
-            SmartDashboard.putBoolean(getName() + "/Reverse Limit Switch Closed?", elevationMotor.getSensorCollection().isRevLimitSwitchClosed());
-        if (elevationMotor.getSensorCollection().isRevLimitSwitchClosed()){
+        reverseElevationLimitSwitchClosed = elevationMotor.getSensorCollection().isRevLimitSwitchClosed();
+        leftAzimuthLimitSwitchClosed = azimuthMotor.getSensorCollection().isRevLimitSwitchClosed();
+        rightAzimuthLimitSwitchClosed = azimuthMotor.getSensorCollection().isFwdLimitSwitchClosed();
+        // Checks if the limit switch for the elevation motor is closed, if it is: set
+        // the motor's sensor position to ELEVATION_LIMIT_SWITCH_DEG.
+        // The reason it's a constant and not just 0 is because the limit switch could
+        // be somewhere else.
+        if (reverseElevationLimitSwitchClosed) {
             elevationMotor.setSelectedSensorPosition(
                     (int) (MathUtils.unitConverter(ShooterConstants.ELEVATION_LIMIT_SWITCH_DEG, 360,
                             config.shooter.elevation.ticksPerRevolution) / config.shooter.elevationGearRatio));
+// 254
+        }
+        if (leftAzimuthLimitSwitchClosed) {
+            azimuthMotor.setSelectedSensorPosition(
+                    (int) (MathUtils.unitConverter(-ShooterConstants.AZIMUTH_LEFT_LIMIT_SWITCH_DEG, 360,
+                            config.shooter.azimuth.ticksPerRevolution) / config.shooter.azimuthGearRatio));
+        }
+        if (rightAzimuthLimitSwitchClosed) {
+            azimuthMotor.setSelectedSensorPosition(
+                    (int) (MathUtils.unitConverter(ShooterConstants.AZIMUTH_RIGHT_LIMIT_SWITCH_DEG, 360,
+                            config.shooter.azimuth.ticksPerRevolution) / config.shooter.azimuthGearRatio));
         }
 
         azimuthMotor.set(ControlMode.MotionMagic, targetPositionAzimuth_ticks);
-        
 
-        if (spinningUp){
+        if (spinningUp) {
             spinUp();
             elevationMotor.set(ControlMode.MotionMagic, targetPositionElevation_ticks);
         } else {
@@ -214,23 +278,26 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         }
     }
 
+    /**
+     * Spin up the shooter, then spin up the feeder when the shooter reaches it's
+     * target velocity.
+     */
     public void spinUp() {
         if (!autoAiming) {
-            shooterVelocity_ticks = (float) MathUtils
-                .unitConverter(
-                        SmartDashboard.getNumber(getName() + "/Shooter Velocity RPM",
-                                ShooterConstants.DEFAULT_SHOOTER_VELOCITY_RPM),
-                        600, config.shooter.shooter.ticksPerRevolution)
-                * config.shooter.shooterGearRatio;
+            shooterVelocity_ticks = (float) MathUtils.unitConverter(shooterVelocity_rpm, 600,
+                    config.shooter.shooter.ticksPerRevolution) * config.shooter.shooterGearRatio;
         }
-        double averageError = feederFilter.calculate((double) Math.abs(ballPropulsionMotor.getSelectedSensorVelocity() - shooterVelocity_ticks));
-        // Spin up the feeder.
-        if (averageError <= config.shooter.feederSpinUpDeadband_ticks) {
-            feeder.set(SmartDashboard.getNumber(getName() + "/Feeder Output Percent",
-                    ShooterConstants.FEEDER_OUTPUT_PERCENT));
+        double averageError = feederFilter
+                .calculate((double) Math.abs(ballPropulsionMotor.getSelectedSensorVelocity() - shooterVelocity_ticks));
+
+        SmartDashboard.putNumber(getName() + "/averageError", averageError);
+        // Spin up the feeder if the shooter is up to speed.
+        if (averageError <= config.shooter.feederSpinUpDeadband_ticks && feeding) {
+            feeder.set(feederOutputPercent);
             SmartDashboard.putString(getName() + "/Feeder State", "Feeding");
             upToSpeed = true;
-        } else {
+        } // If it isn't though, turn the feeder off.
+        else {
             upToSpeed = false;
             feeder.set(0);
             SmartDashboard.putString(getName() + "/Feeder State", "Cannot fire: Shooter hasn't been spun up!");
@@ -239,34 +306,39 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         // If we're auto-aiming, it'll use the ticks specified by the vision subsystem.
         // Otherwise, it'll use the one set in NT
         setShooterVelocity((int) shooterVelocity_ticks);
-        // ballPropulsionMotor.set(ControlMode.PercentOutput, (float)SmartDashboard.getNumber(getName() + "/Shooter %Output", 0.5));
+        // ballPropulsionMotor.set(ControlMode.PercentOutput,
+        // (float)SmartDashboard.getNumber(getName() + "/Shooter %Output", 0.5));
         SmartDashboard.putString(getName() + "/Shooter State", "Shooting");
     }
 
     public void stopSpinningUp() {
-        // Spin up the feeder.
+        // Stop the feeder.
         feeder.set(0);
         SmartDashboard.putString(getName() + "/Feeder State", "Doing Nothing");
 
-        // Spin up the shooter.
+        // Stop the shooter.
         ballPropulsionMotor.set(0);
         SmartDashboard.putString(getName() + "/Shooter State", "Doing Nothing");
 
+        // Stop spinning up.
         upToSpeed = false;
         spinningUp = false;
     }
 
     public void spinBMS() {
+
+        // Make sure the BMS is enabled before calling it, if you don't do this, you'll
+        // get a null pointer exception.
         if (config.enableBallManagementSubsystem) {
-            ballManagementSubsystem
-                    .fire((float) SmartDashboard.getNumber(getName() + "/BallManagementSubsystem/Output Percent",
-                            BallManagementConstants.BMS_OUTPUT_PERCENT));
-        } else {
+            ballManagementSubsystem.fire((float) BMSOutputPercent);
+        } // If it's not, make this clear.
+        else {
             SmartDashboard.putString("BallManagementSubsystem/State",
                     "Cannot fire: BallManagementSubsystem is not enabled.");
         }
     }
 
+    // Stop firing.
     public void holdFire() {
         if (config.enableBallManagementSubsystem) {
             ballManagementSubsystem.doNotFire();
@@ -276,17 +348,11 @@ public class ShooterSubsystem extends BitBucketSubsystem {
     public void rotate(double spinRateAzimuth, double spinRateElevation) {
         // Turn turret at a quantity of degrees per second configurable in the smart
         // dashboard.
-        double smartDashboardTurnRateTicksAzimuth = MathUtils
-                .unitConverter(
-                        SmartDashboard.getNumber(getName() + "/Azimuth Turn Rate",
-                                config.shooter.defaultAzimuthTurnVelocity_deg),
-                        360, config.shooter.azimuth.ticksPerRevolution)
-                / config.shooter.azimuthGearRatio;
+        double smartDashboardTurnRateTicksAzimuth = MathUtils.unitConverter(azimuthTurnRate, 360,
+                config.shooter.azimuth.ticksPerRevolution) / config.shooter.azimuthGearRatio;
 
-        double smartDashboardTurnRateTicksElevation = MathUtils.unitConverter(
-                SmartDashboard.getNumber(getName() + "/Elevation Turn Rate",
-                        config.shooter.defaultElevationTurnVelocity_deg),
-                360, config.shooter.elevation.ticksPerRevolution) / config.shooter.elevationGearRatio;
+        double smartDashboardTurnRateTicksElevation = MathUtils.unitConverter(elevationTurnRate, 360,
+                config.shooter.elevation.ticksPerRevolution) / config.shooter.elevationGearRatio;
 
         // Target position changes by this number every time periodic is called.
         targetChangeAzimuth_ticks = (int) (smartDashboardTurnRateTicksAzimuth * spinRateAzimuth);
@@ -294,12 +360,14 @@ public class ShooterSubsystem extends BitBucketSubsystem {
     }
 
     public void rotateToDeg(double targetPointAzimuth, double targetPointElevation) {
+        // Calculate the target position of the turret in ticks.
         double targetPointTicksAzimuth = MathUtils.unitConverter(targetPointAzimuth, 360,
                 config.shooter.azimuth.ticksPerRevolution) / config.shooter.azimuthGearRatio;
 
         double targetPointTicksElevation = MathUtils.unitConverter(targetPointElevation, 360,
                 config.shooter.elevation.ticksPerRevolution) / config.shooter.elevationGearRatio;
 
+        // Set the target position to the calculated number.
         targetPositionAzimuth_ticks = (int) (targetPointTicksAzimuth);
         targetChangeAzimuth_ticks = 0;
 
@@ -332,17 +400,20 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         return getElevationDeg() + offset;
     }
 
-    public void autoAimAzimuth() {
-        rotateToDeg(absoluteDegreesToRotateAzimuth, getElevationDeg());
+    public void autoAimTurret() {
+        var hoodAngle = shooterCalculator.calculateHoodAngle_deg();
+        SmartDashboard.putNumber(getName() + "/Limelight hood angle", shooterCalculator.calculateHoodAngle_deg());
+        rotateToDeg(absoluteDegreesToRotateAzimuth, hoodAngle);
     }
 
+    // epic
     public void autoAimHoodAngle() {
-        rotateToDeg(getAzimuthDeg(), shooterCalculator.calculateHoodAngle_deg());
     }
 
     public void autoAimVelocity() {
         autoAiming = true;
         shooterVelocity_ticks = shooterCalculator.calculateSpeed_ticks();
+        SmartDashboard.putNumber(getName() + "/Limelight velocity", shooterVelocity_ticks);
         startSpinningUp();
 
         // TODO: do this stuff empirically (yay!)
@@ -352,35 +423,36 @@ public class ShooterSubsystem extends BitBucketSubsystem {
     }
 
     public void autoAim() {
-        // autoAimAzimuth();
-        autoAimHoodAngle();
+        autoAimTurret();
         autoAimVelocity();
-        visionSubsystem.turnOnLEDs();
     }
+
     public void stopAutoAim() {
-        visionSubsystem.turnOffLEDs();
         autoAiming = false;
         stopSpinningUp();
+        shooterCalculator.setTargetLocked(false);
     }
 
     public void calculateAbsoluteDegreesToRotate() {
-        boolean validTarget = visionSubsystem.getValidTarget();
-        if (validTarget) {
-            double tx = visionSubsystem.getTx();
-            double degrees = getTargetAzimuthDegGivenOffset(tx);
+        // We believed the offset and thus the degrees might change, causing the robot
+        // to possibly oscillate about its target. To prevent this, take an average.
+        // Didn't make a difference, so we've disabled it. But code remains in case we
+        // want
+        // to use it again.
 
-            // We believed the offset and thus the degrees might change, causing the robot
-            // to possibly oscillate about its target. To prevent this, take an average.
-            // Didn't make a difference, so we've disabled it. But code remains in case we
-            // want
-            // to use it again.
-
-            // If enabled in the constants file, calculate the average of the last values
-            // passed in (up to what FILTER_LENGTH is in ShooterConstants.java).
-            absoluteDegreesToRotateAzimuth = ShooterConstants.USE_AZIMUTH_FILTER ? azimuthFilter.calculate(degrees) : degrees;
-        }
+        // If enabled in the constants file, calculate the average of the last values
+        // passed in (up to what FILTER_LENGTH is in VisionConstants.java).
+        absoluteDegreesToRotateAzimuth = visionSubsystem.getFilteredTx(getAzimuthDeg()) +
+            MathUtils.unitConverter(azimuthMotor.getSelectedSensorPosition(),
+                config.shooter.azimuth.ticksPerRevolution, 360) * config.shooter.azimuthGearRatio;
     }
 
+    public double getDegreesToRotate() {
+        return absoluteDegreesToRotateAzimuth;
+    }
+
+    // Cycles through the positions until it reaches one which is higher than the
+    // current target, then sets the target to that position.
     public void nextPositionElevation() {
         for (int i = 0; i < positions.length; i++) {
             int selectedPositionNumber_ticks = (int) (MathUtils.unitConverter(positions[i], 360,
@@ -394,6 +466,8 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         }
     }
 
+    // Cycles through the positions until it reaches one which is lower than current
+    // the target, then sets the target to that position.
     public void lastPositionElevation() {
         for (int i = positions.length - 1; i >= 0; i--) {
             int selectedPositionNumber_ticks = (int) (MathUtils.unitConverter(positions[i], 360,
@@ -407,6 +481,9 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         }
     }
 
+    // The buttons which trigger the above two functions aren't supposed to be held,
+    // so they set a boolean to true and don't trigger again until it's false.
+    // This sets that boolean to false.
     public void resetPositionElevationSwitcher() {
         positionElevationSwitcherAlreadyPressed = false;
     }
@@ -425,11 +502,11 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         return upToSpeed;
     }
 
-    public boolean isSpinningUp(){
+    public boolean isSpinningUp() {
         return spinningUp;
     }
 
-    public void startSpinningUp(){
+    public void startSpinningUp() {
         spinningUp = true;
     }
 
@@ -440,65 +517,22 @@ public class ShooterSubsystem extends BitBucketSubsystem {
         SmartDashboard.putNumber(getName() + "/Feeder Output Percent", ShooterConstants.FEEDER_OUTPUT_PERCENT);
         SmartDashboard.putNumber(getName() + "/Azimuth Turn Rate", config.shooter.defaultAzimuthTurnVelocity_deg);
         SmartDashboard.putNumber(getName() + "/Elevation Turn Rate", config.shooter.defaultAzimuthTurnVelocity_deg);
-        SmartDashboard.putNumber(getName() + "/Dashboard Elevation Target", ShooterConstants.DEFAULT_ELEVATION_TARGET_DEG);
+        SmartDashboard.putNumber(getName() + "/Dashboard Elevation Target",
+                ShooterConstants.DEFAULT_ELEVATION_TARGET_DEG);
 
         SmartDashboard.putNumber(getName() + "/Shooter %Output", 0.5); // TODO TEMPORARY
-
     }
 
-    @Override
-    public void dashboardPeriodic(float deltaTime) {
-        // Put the outputs on the smart dashboard.
-        SmartDashboard.putNumber(getName() + "/Shooter Output", ballPropulsionMotor.getMotorOutputPercent());
-        SmartDashboard.putNumber(getName() + "/Feeder Output", feeder.getMotorOutputPercent());
-
-        SmartDashboard.putNumber(getName() + "/Shooter current", ballPropulsionMotor.getSupplyCurrent());
-
-        SmartDashboard.putNumber(getName() + "/Target Position ", targetPositionAzimuth_ticks);
-        SmartDashboard.putNumber(getName() + "/Absolute Degrees to Rotate", absoluteDegreesToRotateAzimuth);
-        SmartDashboard.putNumber(getName() + "/Azimuth Position ", azimuthMotor.getSelectedSensorPosition());
-
-        SmartDashboard.putNumber(getName() + "/Azimuth Target Position Deg ",
-                MathUtils.unitConverter(targetPositionAzimuth_ticks, config.shooter.azimuth.ticksPerRevolution, 360)
-                        * config.shooter.azimuthGearRatio);
-
-        SmartDashboard.putNumber(getName() + "/Azimuth Position Deg ",
-                MathUtils.unitConverter(azimuthMotor.getSelectedSensorPosition(),
-                        config.shooter.azimuth.ticksPerRevolution, 360) * config.shooter.azimuthGearRatio);
-
-        SmartDashboard.putNumber(getName() + "/Elevation Position Deg ",
-                MathUtils.unitConverter(elevationMotor.getSelectedSensorPosition(),
-                        config.shooter.elevation.ticksPerRevolution, 360) * config.shooter.elevationGearRatio);
-
-        SmartDashboard.putNumber(getName() + "/Elevation Target Position ", targetPositionElevation_ticks);
-        SmartDashboard.putNumber(getName() + "/Elevation Position ", elevationMotor.getSelectedSensorPosition());
-
-        SmartDashboard.putNumber(getName() + "/Elevation Target Position Deg ",
-                MathUtils.unitConverter(targetPositionElevation_ticks, config.shooter.elevation.ticksPerRevolution, 360)
-                        * config.shooter.elevationGearRatio);
-
-        SmartDashboard.putNumber(getName() + "/Hood Angle", shooterCalculator.calculateHoodAngle_deg());
-        
-        SmartDashboard.putNumber(getName() + "/Falcon temperature", (32 + 1.8*ballPropulsionMotor.getTemperature()));
-    }
-    public void disable(){
-        azimuthMotor.set(0);
-        elevationMotor.set(0);
-        ballPropulsionMotor.set(0);
-        feeder.set(0);
-
-        upToSpeed = false;
-        positionElevationSwitcherAlreadyPressed = false;
-
-        targetPositionAzimuth_ticks = 0;
-        targetChangeAzimuth_ticks = 0;
-        targetPositionElevation_ticks = 0;
-        targetChangeElevation_ticks = 0;
-        absoluteDegreesToRotateAzimuth = 0;
-    }
-
-    public void zeroElevationSensor(){
+    public void zeroElevationSensor() {
         elevationMotor.setSelectedSensorPosition(0);
+    }
+
+    public void spinFeeder() {
+        feeding = true;
+    }
+
+    public void stopSpinningFeeder() {
+        feeding = false;
     }
 
     private double lastTime = System.nanoTime();
@@ -550,10 +584,96 @@ public class ShooterSubsystem extends BitBucketSubsystem {
     }
 
     @Override
-    protected void listTalons() {
+    public void listTalons() {
         talons.add(azimuthMotor);
         talons.add(elevationMotor);
         talons.add(ballPropulsionMotor);
         talons.add(feeder);
+    }
+
+    @Override
+    public void dashboardPeriodic(float deltaTime) {
+        // Put the outputs on the smart dashboard.
+        smartDashboardGetterRateLimiterClock = smartDashboardGetterRateLimiterClock + deltaTime;
+        if (getTelemetryEnabled()) {
+            SmartDashboard.putNumber(getName() + "/Shooter Output", ballPropulsionMotor.getMotorOutputPercent());
+            SmartDashboard.putNumber(getName() + "/Feeder Output", feeder.getMotorOutputPercent());
+
+            SmartDashboard.putNumber(getName() + "/Shooter current", ballPropulsionMotor.getSupplyCurrent());
+
+            SmartDashboard.putNumber(getName() + "/Target Position ", targetPositionAzimuth_ticks);
+            SmartDashboard.putNumber(getName() + "/Absolute Degrees to Rotate", absoluteDegreesToRotateAzimuth);
+            SmartDashboard.putNumber(getName() + "/Azimuth Position ", azimuthMotor.getSelectedSensorPosition());
+
+            SmartDashboard.putNumber(getName() + "/Azimuth Target Position Deg ",
+                    MathUtils.unitConverter(targetPositionAzimuth_ticks, config.shooter.azimuth.ticksPerRevolution, 360)
+                            * config.shooter.azimuthGearRatio);
+
+            SmartDashboard.putNumber(getName() + "/Azimuth Position Deg ",
+                    MathUtils.unitConverter(azimuthMotor.getSelectedSensorPosition(),
+                            config.shooter.azimuth.ticksPerRevolution, 360) * config.shooter.azimuthGearRatio);
+
+            SmartDashboard
+                    .putNumber(getName() + "/Elevation Position Deg ",
+                            MathUtils.unitConverter(elevationMotor.getSelectedSensorPosition(),
+                                    config.shooter.elevation.ticksPerRevolution, 360)
+                                    * config.shooter.elevationGearRatio);
+
+            SmartDashboard.putNumber(getName() + "/Elevation Target Position ", targetPositionElevation_ticks);
+            SmartDashboard.putNumber(getName() + "/Elevation Position ", elevationMotor.getSelectedSensorPosition());
+
+            SmartDashboard
+                    .putNumber(getName() + "/Elevation Target Position Deg ",
+                            MathUtils.unitConverter(targetPositionElevation_ticks,
+                                    config.shooter.elevation.ticksPerRevolution, 360)
+                                    * config.shooter.elevationGearRatio);
+
+            SmartDashboard.putNumber(getName() + "/Hood Angle", shooterCalculator.calculateHoodAngle_deg());
+
+            SmartDashboard.putNumber(getName() + "/Falcon temperature",
+                    (32 + 1.8 * ballPropulsionMotor.getTemperature()));
+
+            SmartDashboard.putBoolean(getName() + "/Reverse Elevation Limit Switch Closed?",
+                    reverseElevationLimitSwitchClosed);
+            SmartDashboard.putBoolean(getName() + "/Left Azimuth Limit Switch Closed?", leftAzimuthLimitSwitchClosed);
+            SmartDashboard.putBoolean(getName() + "/Right Azimuth Limit Switch Closed?", rightAzimuthLimitSwitchClosed);
+
+            SmartDashboard.putNumber(getName() + "/SmartDashboard Getter Rate Limiter Clock",
+                    smartDashboardGetterRateLimiterClock);
+        }
+
+        if (smartDashboardGetterRateLimiterClock >= 1) {
+            smartDashboardGetterRateLimiterClock = 0;
+            shooterVelocity_rpm = SmartDashboard.getNumber(getName() + "/Shooter Velocity RPM",
+                    ShooterConstants.DEFAULT_SHOOTER_VELOCITY_RPM);
+
+            feederOutputPercent = SmartDashboard.getNumber(getName() + "/Feeder Output Percent",
+                    ShooterConstants.FEEDER_OUTPUT_PERCENT);
+
+            BMSOutputPercent = SmartDashboard.getNumber(getName() + "/BallManagementSubsystem/Output Percent",
+                    BallManagementConstants.BMS_OUTPUT_PERCENT);
+
+            azimuthTurnRate = SmartDashboard.getNumber(getName() + "/Azimuth Turn Rate",
+                    config.shooter.defaultAzimuthTurnVelocity_deg);
+            elevationTurnRate = SmartDashboard.getNumber(getName() + "/Elevation Turn Rate",
+                    config.shooter.defaultElevationTurnVelocity_deg);
+        }
+    }
+
+    // Turns everything off immediately.
+    public void disable() {
+        azimuthMotor.set(0);
+        elevationMotor.set(0);
+        ballPropulsionMotor.set(0);
+        feeder.set(0);
+
+        upToSpeed = false;
+        positionElevationSwitcherAlreadyPressed = false;
+
+        targetPositionAzimuth_ticks = 0;
+        targetChangeAzimuth_ticks = 0;
+        targetPositionElevation_ticks = 0;
+        targetChangeElevation_ticks = 0;
+        absoluteDegreesToRotateAzimuth = 0;
     }
 }

@@ -1,25 +1,23 @@
 package frc.robot.subsystem.climber;
 
-import com.ctre.phoenix.motorcontrol.can.TalonSRX;
+import com.ctre.phoenix.motorcontrol.ControlMode;
 import com.ctre.phoenix.motorcontrol.can.WPI_TalonSRX;
 
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import frc.robot.config.Config;
 import frc.robot.subsystem.BitBucketSubsystem;
+import frc.robot.utils.dashboard.DashboardFactory;
 import frc.robot.utils.talonutils.MotorUtils;
 
 public class ClimbSubsystem extends BitBucketSubsystem {
-    public enum ClimbState {
-        Extending, Retracting, Off;
-    }
 
+    private final ClimbDashboard climbDashboard;
     private boolean active = false;
     protected WPI_TalonSRX motorRight;
     protected WPI_TalonSRX motorLeft;
-    private ClimbState climbState = ClimbState.Off;
 
     public ClimbSubsystem(Config config) {
         super(config);
+        climbDashboard = DashboardFactory.create(ClimbDashboard.class);
     }
 
     @Override
@@ -27,8 +25,6 @@ public class ClimbSubsystem extends BitBucketSubsystem {
         super.initialize();
         motorRight = MotorUtils.makeSRX(config.climb.climbRight);
         motorLeft = MotorUtils.makeSRX(config.climb.climbLeft);
-        motorLeft.setInverted(true);
-        motorLeft.follow(motorRight);
     }
 
     @Override
@@ -48,68 +44,78 @@ public class ClimbSubsystem extends BitBucketSubsystem {
 
     @Override
     public void periodic(float deltaTime) {
-        if (active) {
-            switch (climbState) {
-                case Off:
-                    motorRight.set(0);
-                    SmartDashboard.putString(getName() + "/ClimbState", "Retracted");
-                    break;
+    }
 
-                case Extending:
-                    motorRight.set(
-                            SmartDashboard.getNumber(getName() + "/Climber Current", ClimbConstants.EXTEND_OUTPUT));
-                    SmartDashboard.putString(getName() + "/ClimbState", "Extending");
-                    break;
+    public void pitRewind(double leftStick, double rightStick) {
+        if (!isRewindEnabled()) {
+            return;
+        }
 
-                // no holding state is needed, since a mechanical ratchet will hold the robot
-                // while its hanging
-                case Retracting:
-                    motorRight.set(
-                            SmartDashboard.getNumber(getName() + "/Climber Current", ClimbConstants.RETRACT_OUTPUT));
-                    SmartDashboard.putString(getName() + "/ClimbState", "Retracting");
-                    break;
-            }
+        // invert because otherwise down is positive
+        leftStick *= -1;
+        rightStick *= -1;
+
+        motorLeft.set(climbDashboard.rewindOutput() * leftStick);
+        motorRight.set(climbDashboard.rewindOutput() * rightStick);
+    }
+
+    public void toggleActive() {
+        active = !active;
+    }
+
+    public void disableClimb() {
+        active = false;
+    }
+
+    public void disableRewind() {
+        climbDashboard.putRewindEnabled(false);
+    }
+
+    public boolean isRewindEnabled(){
+        return climbDashboard.rewindEnabled();
+    }
+
+    public boolean isActive(){
+        return active;
+    }
+
+    public void manualClimb(double leftStick, double rightStick){
+        leftStick = Math.abs(leftStick);
+        rightStick = Math.abs(rightStick);
+
+        if (leftStick > ClimbConstants.DEADBAND) {
+            motorLeft.set(ControlMode.PercentOutput, leftStick * climbDashboard.windOutput());
+        } else {
+            motorLeft.set(ControlMode.PercentOutput, 0);
+        }
+        if (rightStick > ClimbConstants.DEADBAND) {
+            motorRight.set(ControlMode.PercentOutput, rightStick * climbDashboard.windOutput());
+        } else {
+            motorRight.set(ControlMode.PercentOutput, 0);
         }
     }
 
-    public void activateClimb() {
-        active = true;
-    }
+    @Override
+    public void dashboardInit() {
+        super.dashboardInit();
+        disableRewind();
 
-    public boolean isExtending() {
-        return climbState == ClimbState.Extending;
-        if (TalonSRX.getSelectedSensorVelocity() >= 5000){
-            setState(off());
-        }
-    }
-
-    public void off() {
-        climbState = ClimbState.Off;
-    }
-
-    public void retracting() {
-        if (active) {
-            climbState = ClimbState.Retracting;
-        }
-    }
-
-    public void extending() {
-        if (active) {
-            climbState = ClimbState.Extending;
-        }
     }
 
     @Override
     public void dashboardPeriodic(float deltaTime) {
-        // TODO Auto-generated method stub
-
+        climbDashboard.putLeftMotorOutput(motorLeft.getMotorOutputPercent());
+        climbDashboard.putRightMotorOutput(motorRight.getMotorOutputPercent());
+        climbDashboard.putActive(active);
     }
 
     public void disable() {
+        motorLeft.set(0);
+        motorRight.set(0);
     }
 
     @Override
-    protected void listTalons() {
+    public void listTalons() {
         talons.add(motorRight);
         talons.add(motorLeft);
     }

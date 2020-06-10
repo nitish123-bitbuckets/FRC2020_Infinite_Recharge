@@ -1,42 +1,42 @@
 package frc.robot.subsystem.drive.auto;
 
 import frc.robot.subsystem.drive.DriveSubsystem;
-import frc.robot.subsystem.drive.Idle;
-import frc.robot.subsystem.drive.RotationDrive;
-import frc.robot.subsystem.drive.VelocityDrive;
-import frc.robot.subsystem.drive.DriveSubsystem.DriveMethod;
-import frc.robot.utils.CommandUtils;
 import edu.wpi.first.wpilibj.Timer;
-import edu.wpi.first.wpilibj.controller.RamseteController;
 import edu.wpi.first.wpilibj.geometry.Pose2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.RamseteCommand;
-import edu.wpi.first.wpilibj.trajectory.Trajectory.State;
+import edu.wpi.first.wpilibj.trajectory.Trajectory;
 
 
 
+// used to autonomously command a single trajectory using WPILib's RAMSETE controller
 public class AutoDrive extends RamseteCommand {
     private final DriveSubsystem DRIVE_SUBSYSTEM;
 
     private Timer timer;
 
+    private final Trajectory TRAJ;
 
 
-    public AutoDrive(DriveSubsystem driveSubsystem) {
+
+    public AutoDrive(DriveSubsystem driveSubsystem, Trajectory traj) {
         super(
-            driveSubsystem.getAutoTrajectory(),
+            traj,
             driveSubsystem::getPose,
             driveSubsystem.getRAMSETEController(),
+            driveSubsystem.getCharacterization(),
             driveSubsystem.getKinematics(),
-            driveSubsystem::setWheelSpeeds,
+            driveSubsystem::getWheelSpeeds,
+            driveSubsystem.getLeftAutoPID(),
+            driveSubsystem.getRightAutoPID(),
+            driveSubsystem::tankVolts,
             driveSubsystem
         );
 
         DRIVE_SUBSYSTEM = driveSubsystem;
         timer = new Timer();
+        TRAJ = traj;
     }
-
-
 
     public void initialize() {
         super.initialize();
@@ -51,8 +51,9 @@ public class AutoDrive extends RamseteCommand {
         super.execute();
 
         Pose2d actual = DRIVE_SUBSYSTEM.getNavigation().getPose();
-        Pose2d desired = DRIVE_SUBSYSTEM.getAutoTrajectory().sample(timer.get()).poseMeters;
+        Pose2d desired = TRAJ.sample(timer.get()).poseMeters;
 
+        // output target and actual positions for testing
         SmartDashboard.putNumber("DriveSubsystem/actual x", actual.getTranslation().getX());
         SmartDashboard.putNumber("DriveSubsystem/actual y", actual.getTranslation().getY());
         SmartDashboard.putNumber("DriveSubsystem/actual theta", actual.getRotation().getDegrees());
@@ -62,20 +63,4 @@ public class AutoDrive extends RamseteCommand {
         SmartDashboard.putNumber("DriveSubsystem/desired theta", desired.getRotation().getDegrees());
     }
 
-    @Override
-    public boolean isFinished() {
-        // whether the RAMSETE command trajectory has been executed
-        boolean trajDone = super.isFinished();
-
-        // go into idle once trajectory has been finished
-        if (trajDone) {
-            return CommandUtils.stateChange(new Idle(DRIVE_SUBSYSTEM));
-        }
-
-        if (DRIVE_SUBSYSTEM.getDriveMethod() == DriveMethod.IDLE) {
-            return CommandUtils.stateChange(new Idle(DRIVE_SUBSYSTEM));
-        }
-
-        return false;
-    }
 }
