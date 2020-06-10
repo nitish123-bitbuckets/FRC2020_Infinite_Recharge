@@ -4,7 +4,7 @@ import edu.wpi.first.wpilibj.util.Color;
 
 public class SpinnyBoiConstants {
 
-    static final double SPIN_NUM = 5000.0;
+    static final double SECONDS_PER_ARC = 0.71;
     // public static final double SPIN_NUM = 32768.0;
 
     static final double SPINNYBOI_FORWARD = 0.5;

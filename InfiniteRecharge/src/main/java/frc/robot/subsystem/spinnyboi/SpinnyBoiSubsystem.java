@@ -25,6 +25,8 @@ public class SpinnyBoiSubsystem extends BitBucketSubsystem {
 
     WPI_TalonSRX motor;
 
+    private double spinTime;
+
     public SpinnyBoiSubsystem(Config config) {
         super(config);
     }
@@ -67,22 +69,30 @@ public class SpinnyBoiSubsystem extends BitBucketSubsystem {
         }
 
     }
+
+    // 123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899100
+    spinnyBoiTargetColor = SmartDashboard.getNumber(SpinnyBoiSubsystem.getName() + "/Dashboard Elevation Target", 0);
     
     public void getDirection(SpinnyBoiColor index){
         int currentColor = index.index;
-        int targetColor = index.spinnyBoiSensorTarget;
-        int indexDifference = targetColor-currentColor; 
+        int targetColor = index.spinnyBoiTargetColor;
+        double indexDifference = targetColor-currentColor; 
         if((indexDifference > 0) && (indexDifference != 3)){
            state = SpinnyBoiState.Clockwise;
+           spinTime = indexDifference * SpinnyBoiConstants.SECONDS_PER_ARC;
         }
         else if((indexDifference < 0) && (indexDifference != -3)){
             state = SpinnyBoiState.CounterClockwise;
+            spinTime = indexDifference * SpinnyBoiConstants.SECONDS_PER_ARC;
+
         }
         else if(indexDifference == 3){
             state = SpinnyBoiState.CounterClockwise;
+            spinTime = 1 * SpinnyBoiConstants.SECONDS_PER_ARC;
         }
         else if(indexDifference == -3){
             state = SpinnyBoiState.Clockwise;
+            spinTime = 1 * SpinnyBoiConstants.SECONDS_PER_ARC;
         }
         else{
             state = SpinnyBoiState.Off;
@@ -176,7 +186,7 @@ public class SpinnyBoiSubsystem extends BitBucketSubsystem {
     public void rotationControl() {
         // Rotate the wheel 3 - 5 times
 
-        motor.set(ControlMode.MotionMagic, SpinnyBoiConstants.SPIN_NUM);
+        motor.set(ControlMode.MotionMagic, SpinnyBoiConstants.SECONDS_PER_ARC);
     }
 
     public void manualRotationControl() {

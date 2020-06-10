@@ -1,5 +1,6 @@
 package frc.robot.subsystem.climber;
 
+import com.ctre.phoenix.motorcontrol.can.TalonSRX;
 import com.ctre.phoenix.motorcontrol.can.WPI_TalonSRX;
 
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
@@ -77,6 +78,9 @@ public class ClimbSubsystem extends BitBucketSubsystem {
 
     public boolean isExtending() {
         return climbState == ClimbState.Extending;
+        if (TalonSRX.getSelectedSensorVelocity() >= 5000){
+            setState(off());
+        }
     }
 
     public void off() {
